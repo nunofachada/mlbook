@@ -60,11 +60,8 @@ class AccuracyRegister(AbstractRegister):
             result = linfer(self.test_data[j, :], nn)[-1]
             actual_out[j, np.argmax(result)] = self.node_on
 
-        # A little hack to also calculate the loss (this is the MSE,
-        # for easier comparison with Keras)
-        self.losses[self.epoch] = np.sum((self.expect_out - actual_out) ** 2) / len(
-            self.expect_out
-        )
+        # A little hack to also calculate the MSE loss
+        self.losses[self.epoch] = np.mean((self.expect_out - actual_out) ** 2)
 
         self.accuracies[self.epoch] = calc_accuracy(self.expect_out, actual_out)
 
@@ -162,7 +159,7 @@ def backpropagation(
             e = np.zeros(topol[-1])
             for k in range(topol[-1]):
                 ok = output[-1][k]
-                e[k] = ok * (1 - ok) * (train_output[j, k] - ok)
+                e[k] = 2 * ok * (1 - ok) * (train_output[j, k] - ok) / topol[-1]
             err.insert(0, e)
 
             # For each hidden layer...
@@ -172,7 +169,7 @@ def backpropagation(
                 for h in range(topol[layer]):
                     oh = output[layer][h]
                     e[h] = oh * (1 - oh) * np.sum(nn[layer][h + 1, :] * err[0])
-                err.insert(0, e / topol[layer])
+                err.insert(0, e)
 
             # Update the network weights
             for layer in range(len(nn)):
@@ -250,7 +247,11 @@ def vbackpropagation(
 
             # Determine the errors for each output unit
             err.insert(
-                0, output[-1] * (1 - output[-1]) * (train_output[j, :] - output[-1])
+                0,
+                2 * output[-1]
+                * (1 - output[-1])
+                * (train_output[j, :] - output[-1])
+                / topol[-1],
             )
 
             # For each hidden layer...
@@ -258,7 +259,7 @@ def vbackpropagation(
                 # ...determine the error of each of its units
                 o = output[layer]
                 sumult = nn[layer][1:, :] @ err[0]
-                err.insert(0, o * (1 - o) * (sumult / len(o)))
+                err.insert(0, o * (1 - o) * sumult)
 
             # Update the network weights
             for layer in range(len(nn)):
