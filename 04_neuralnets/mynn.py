@@ -3,6 +3,89 @@ from numpy import typing as npt
 from numpy import random as rnd
 from collections.abc import Callable, Sequence
 import matplotlib.pyplot as plt
+from abc import ABC, abstractmethod
+
+
+# ##############################################################################
+# Accuracy register code
+#
+# The below code is used to keep track of accuracy during training, as well as
+# for plotting accuracy evolution.
+# ##############################################################################
+
+
+def calc_accuracy(expected: npt.NDArray, actual: npt.NDArray) -> float:
+    """Determine accuracy (0-1)."""
+    correct = np.sum(np.all(actual == expected, axis=1))
+    return correct / expected.shape[0]
+
+
+class AbstractRegister(ABC):
+    @abstractmethod
+    def register(
+        self,
+        nn: Sequence[npt.NDArray],
+        linfer: Callable[[npt.NDArray, Sequence[npt.NDArray]], Sequence[npt.NDArray]],
+    ):
+        pass
+
+
+class AccuracyRegister(AbstractRegister):
+    """Use this for keeping track of accuracy evolution during training."""
+
+    def __init__(
+        self,
+        test_data: npt.NDArray,
+        expect_out: npt.NDArray,
+        epochs: int,
+        node_off: float,
+        node_on: float,
+    ):
+        self.test_data = test_data
+        self.expect_out = expect_out
+        self.epoch = 0
+        self.node_off = node_off
+        self.node_on = node_on
+        self.accuracies = np.zeros(epochs)
+        self.losses = np.zeros(epochs)
+
+    def register(
+        self,
+        nn: Sequence[npt.NDArray],
+        linfer: Callable[[npt.NDArray, Sequence[npt.NDArray]], Sequence[npt.NDArray]],
+    ):
+        """Determine accuracy after current epoch."""
+        actual_out = self.node_off * np.ones(self.expect_out.shape)
+        for j in range(actual_out.shape[0]):
+            result = linfer(self.test_data[j, :], nn)[-1]
+            actual_out[j, np.argmax(result)] = self.node_on
+
+        # A little hack to also calculate the loss (this is the MSE,
+        # for easier comparison with Keras)
+        self.losses[self.epoch] = np.sum((self.expect_out - actual_out) ** 2) / len(
+            self.expect_out
+        )
+
+        self.accuracies[self.epoch] = calc_accuracy(self.expect_out, actual_out)
+
+        self.epoch += 1
+
+
+def plot_metric(
+    epochs: int,
+    accuracies: dict[str, npt.NDArray],
+    metric: str = "Metric",
+    title: str = "",
+):
+    """Plot accuracy during training."""
+    fig, ax = plt.subplots()
+    for label, fits in accuracies.items():
+        ax.plot(range(0, epochs), fits, label=label)
+    ax.set_xlabel("Epochs")
+    ax.set_ylabel(metric)
+    ax.legend()
+    if len(title) > 0:
+        fig.suptitle(title)
 
 
 # ##############################################################################
@@ -12,12 +95,13 @@ import matplotlib.pyplot as plt
 # as they follow the algorithms exactly.
 # ##############################################################################
 
+
 def sigm(x: float):
     """Standard logistic function."""
     return 1.0 / (1 + np.exp(np.clip(-x, -88.72, 88.72)))
 
 
-def infer(input: npt.NDArray, nn: list[npt.NDArray]) -> list[npt.NDArray]:
+def infer(input: npt.NDArray, nn: Sequence[npt.NDArray]) -> Sequence[npt.NDArray]:
     """Use a neural network to infer a classification (loop-based version)."""
     output = [input]
 
@@ -50,7 +134,7 @@ def backpropagation(
     epochs: int,
     eta: float,
     momentum: float = 0,
-    hooks: Sequence[Callable[[npt.NDArray], None]] = [],
+    hooks: Sequence[AbstractRegister] = [],
     seed: int = 123,
 ):
     """Backpropagation training algorithm, loop-based version."""
@@ -82,7 +166,7 @@ def backpropagation(
             err.insert(0, e)
 
             # For each hidden layer...
-            for layer in np.arange(len(nn) - 1, 0, -1):
+            for layer in np.arange(len(nn) - 1, 0, -1, dtype=int):
                 # ...determine the error of each of its units
                 e = np.zeros(topol[layer])
                 for h in range(topol[layer]):
@@ -106,6 +190,7 @@ def backpropagation(
 
     return nn
 
+
 # ##############################################################################
 # Vectorized versions
 #
@@ -118,7 +203,7 @@ def backpropagation(
 vsigm = np.vectorize(sigm)
 
 
-def vinfer(input: npt.NDArray, nn: list[npt.NDArray]) -> list[npt.NDArray]:
+def vinfer(input: npt.NDArray, nn: Sequence[npt.NDArray]) -> Sequence[npt.NDArray]:
     """Use a neural network to infer a classification (vectorized version)."""
     output = [input]
 
@@ -139,7 +224,7 @@ def vbackpropagation(
     epochs: int,
     eta: float,
     momentum: float = 0,
-    hooks: Sequence[Callable[[npt.NDArray], None]] = [],
+    hooks: Sequence[AbstractRegister] = [],
     seed: int = 123,
 ):
     """Backpropagation training algorithm, vectorized version."""
@@ -169,7 +254,7 @@ def vbackpropagation(
             )
 
             # For each hidden layer...
-            for layer in np.arange(len(nn) - 1, 0, -1):
+            for layer in np.arange(len(nn) - 1, 0, -1, dtype=int):
                 # ...determine the error of each of its units
                 o = output[layer]
                 sumult = nn[layer][1:, :] @ err[0]
@@ -226,59 +311,3 @@ def oneofn2categ(oneofn: npt.NDArray, mapping: dict, node_off: float, node_on: f
             return categ
 
     return None
-
-
-# ##############################################################################
-# Accuracy register code
-#
-# The below code is used to keep track of accuracy during training, as well as
-# for plotting accuracy evolution.
-# ##############################################################################
-
-
-def calc_accuracy(expected: npt.NDArray, actual: npt.NDArray) -> float:
-    """Determine accuracy (0-1)."""
-    correct = np.sum(np.apply_along_axis(np.all, 1, actual == expected))
-    return correct / expected.shape[0]
-
-
-class AccuracyRegister:
-    """Use this for keeping track of accuracy evolution during training."""
-
-    def __init__(
-        self,
-        test_data: npt.NDArray,
-        expect_out: npt.NDArray,
-        epochs: int,
-        node_off: float,
-        node_on: float,
-    ):
-        self.test_data = test_data
-        self.expect_out = expect_out
-        self.epoch = 0
-        self.node_off = node_off
-        self.node_on = node_on
-        self.accuracies = np.zeros(epochs)
-        self.losses = np.zeros(epochs)
-
-    def register(self, nn: npt.NDArray, linfer: Callable):
-        """Determine accuracy after current epoch."""
-        actual_out = self.node_off * np.ones(self.expect_out.shape)
-        for j in range(actual_out.shape[0]):
-            result = linfer(self.test_data[j, :], nn)[-1]
-            actual_out[j, np.argmax(result)] = self.node_on
-
-        self.accuracies[self.epoch] = calc_accuracy(self.expect_out, actual_out)
-        self.epoch += 1
-
-
-def plot_accuracy(epochs: int, accuracies: dict[str, npt.NDArray], title: str = ""):
-    """Plot accuracy during training."""
-    fig, ax = plt.subplots()
-    for label, fits in accuracies.items():
-        ax.plot(range(0, epochs), fits, label=label)
-    ax.set_xlabel("Epochs")
-    ax.set_ylabel("Accuracy")
-    ax.legend()
-    if len(title) > 0:
-        fig.suptitle(title)
